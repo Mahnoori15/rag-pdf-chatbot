@@ -1,54 +1,59 @@
+"""
+RAG PDF Chatbot - command-line interface.
+
+Usage:
+    python app.py path/to/document.pdf
+"""
+
+import argparse
 import os
+import sys
+
 from dotenv import load_dotenv
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import FAISS
-from langchain.chains import RetrievalQA
-from langchain_community.document_loaders import PyPDFLoader
 
-# Load environment variables
-load_dotenv()
+from rag_pipeline import RAGPipeline
 
-def setup_rag_pipeline(pdf_path):
-    """Setup RAG pipeline with PDF document"""
-    # Load PDF
-    loader = PyPDFLoader(pdf_path)
-    documents = loader.load()
-    
-    # Initialize embeddings and vector store
-    embeddings = OpenAIEmbeddings()
-    vector_store = FAISS.from_documents(documents, embeddings)
-    
-    # Setup QA chain
-    llm = ChatOpenAI(model="gpt-4", temperature=0)
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=vector_store.as_retriever()
-    )
-    
-    return qa_chain
 
 def main():
-    """Main function"""
+    """Load a PDF and start an interactive question-answering session."""
+    load_dotenv()
+
+    parser = argparse.ArgumentParser(description="Ask questions about a PDF.")
+    parser.add_argument("pdf_path", help="Path to the PDF file")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="OpenAI chat model (default: OPENAI_MODEL env var or gpt-4o-mini)",
+    )
+    args = parser.parse_args()
+
+    if not os.getenv("OPENAI_API_KEY"):
+        sys.exit("OPENAI_API_KEY is not set. Copy .env.example to .env and add your key.")
+
     print("RAG PDF Chatbot")
     print("=" * 50)
-    
-    # Example usage
-    pdf_path = "sample.pdf"  # Replace with your PDF path
-    
-    if os.path.exists(pdf_path):
-        qa_chain = setup_rag_pipeline(pdf_path)
-        
-        # Interactive chat
-        while True:
-            question = input("\nAsk a question about the PDF (or 'quit' to exit): ")
-            if question.lower() == 'quit':
-                break
-            
-            answer = qa_chain.run(question)
-            print(f"\nAnswer: {answer}")
-    else:
-        print(f"PDF file not found: {pdf_path}")
+
+    try:
+        pipeline = RAGPipeline(model=args.model)
+        pipeline.initialize_from_pdf(args.pdf_path)
+    except FileNotFoundError as error:
+        sys.exit(str(error))
+
+    while True:
+        try:
+            question = input("\nAsk a question about the PDF (or 'quit' to exit): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
+        if not question:
+            continue
+        if question.lower() in {"quit", "exit"}:
+            break
+
+        answer = pipeline.query(question)
+        print(f"\nAnswer: {answer}")
+
 
 if __name__ == "__main__":
     main()
