@@ -1,0 +1,43 @@
+name: deploy to Hugging Face Spaces
+
+# Pushes main to a Hugging Face Space after CI passes.
+# Setup (once): create a Docker Space on huggingface.co, then add to this
+# GitHub repo's Settings -> Secrets and variables -> Actions:
+#   secret   HF_TOKEN  a Hugging Face access token with write permission
+#   variable HF_SPACE  the Space id, e.g. your-hf-username/rag-pdf-chatbot
+# Until both are set, this workflow does nothing.
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    if: ${{ vars.HF_SPACE != '' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install huggingface_hub
+      - name: Upload to Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE: ${{ vars.HF_SPACE }}
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+          HfApi(token=os.environ["HF_TOKEN"]).upload_folder(
+              repo_id=os.environ["HF_SPACE"],
+              repo_type="space",
+              folder_path=".",
+              ignore_patterns=[".git/*", ".github/*", "docs/*", "tests/*", "*.pdf", ".env"],
+              delete_patterns=["*"],  # remove files deleted from the repo
+              commit_message=f"Deploy {os.environ.get('GITHUB_SHA', '')[:7]} from GitHub",
+          )
+          PY

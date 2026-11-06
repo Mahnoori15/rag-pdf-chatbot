@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAG PDF Chatbot</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>Ask your PDF</h1>
+    <p class="muted">Upload a PDF, then ask questions. Answers come only from the document, with the pages they used.</p>
+  </header>
+
+  <details id="key-box">
+    <summary>OpenAI API key <span id="key-status" class="muted"></span></summary>
+    <p class="muted small">Your key is sent with each request and is never stored on the server. It is kept in this browser tab only.</p>
+    <input id="api-key" type="password" placeholder="sk-..." autocomplete="off">
+  </details>
+
+  <section id="upload-section">
+    <label id="drop" for="file">
+      <input id="file" type="file" accept="application/pdf">
+      <span id="drop-text">Choose a PDF or drop it here</span>
+      <span id="limits" class="muted small"></span>
+    </label>
+  </section>
+
+  <section id="chat-section" hidden>
+    <div id="doc-info" class="muted small"></div>
+    <div id="messages" aria-live="polite"></div>
+    <form id="ask-form">
+      <input id="question" type="text" placeholder="Ask a question about the PDF" maxlength="1000" autocomplete="off" required>
+      <button type="submit">Ask</button>
+    </form>
+  </section>
+
+  <p id="error" role="alert" hidden></p>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let sessionId = null;
+let serverKey = false;
+
+function showError(message) {
+  $("error").textContent = message;
+  $("error").hidden = !message;
+}
+
+function apiKey() {
+  return $("api-key").value.trim();
+}
+
+function updateKeyStatus() {
+  if (apiKey()) $("key-status").textContent = "(using your key)";
+  else if (serverKey) $("key-status").textContent = "(optional)";
+  else $("key-status").textContent = "(required)";
+}
+
+async function request(url, options) {
+  const response = await fetch(url, options);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.detail || `Request failed (${response.status})`);
+  return body;
+}
+
+function addMessage(role, text, sources) {
+  const message = document.createElement("div");
+  message.className = `message ${role}`;
+  const p = document.createElement("p");
+  p.textContent = text;
+  message.appendChild(p);
+  if (sources && sources.length) {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    const pages = [...new Set(sources.map((s) => s.page).filter(Boolean))].sort((a, b) => a - b);
+    summary.textContent = pages.length ? `Sources: page ${pages.join(", ")}` : "Sources";
+    details.appendChild(summary);
+    for (const source of sources) {
+      const quote = document.createElement("blockquote");
+      quote.textContent = (source.page ? `p. ${source.page}: ` : "") + source.text;
+      details.appendChild(quote);
+    }
+    message.appendChild(details);
+  }
+  $("messages").appendChild(message);
+  message.scrollIntoView({ behavior: "smooth", block: "end" });
+  return message;
+}
+
+async function uploadFile(file) {
+  if (!file) return;
+  showError("");
+  if (!apiKey() && !serverKey) {
+    $("key-box").open = true;
+    showError("Add your OpenAI API key first.");
+    return;
+  }
+  $("drop-text").textContent = `Reading ${file.name}…`;
+  const form = new FormData();
+  form.append("file", file);
+  try {
+    const headers = apiKey() ? { "X-OpenAI-Key": apiKey() } : {};
+    const result = await request("/api/upload", { method: "POST", body: form, headers });
+    sessionId = result.session_id;
+    $("doc-info").textContent = `${result.filename} · ${result.pages} pages · ${result.chunks} chunks indexed`;
+    $("messages").replaceChildren();
+    $("chat-section").hidden = false;
+    $("drop-text").textContent = "Choose another PDF";
+    $("question").focus();
+  } catch (error) {
+    $("drop-text").textContent = "Choose a PDF or drop it here";
+    showError(error.message);
+  }
+}
+
+$("file").addEventListener("change", (event) => uploadFile(event.target.files[0]));
+$("drop").addEventListener("dragover", (event) => { event.preventDefault(); $("drop").classList.add("over"); });
+$("drop").addEventListener("dragleave", () => $("drop").classList.remove("over"));
+$("drop").addEventListener("drop", (event) => {
+  event.preventDefault();
+  $("drop").classList.remove("over");
+  uploadFile(event.dataTransfer.files[0]);
+});
+
+$("ask-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const question = $("question").value.trim();
+  if (!question || !sessionId) return;
+  showError("");
+  addMessage("user", question);
+  $("question").value = "";
+  const pending = addMessage("assistant pending", "Thinking…");
+  const button = $("ask-form").querySelector("button");
+  button.disabled = true;
+  try {
+    const result = await request("/api/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, question }),
+    });
+    pending.remove();
+    addMessage("assistant", result.answer, result.sources);
+  } catch (error) {
+    pending.remove();
+    showError(error.message);
+  } finally {
+    button.disabled = false;
+    $("question").focus();
+  }
+});
+
+$("api-key").addEventListener("input", updateKeyStatus);
+
+request("/api/config").then((config) => {
+  serverKey = config.server_key;
+  $("limits").textContent = `Up to ${config.max_pdf_mb} MB and ${config.max_pages} pages · model: ${config.model}`;
+  if (!serverKey) $("key-box").open = true;
+  updateKeyStatus();
+}).catch(() => showError("Could not reach the server."));
+</script>
+</body>
+</html>
