@@ -7,23 +7,25 @@ import os
 from typing import List, Optional
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import FAISS
-from langchain.chains import RetrievalQA
+from langchain_classic.chains import RetrievalQA
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 
 class RAGPipeline:
     """Manages RAG pipeline for PDF documents"""
     
-    def __init__(self, model: str = "gpt-4", temperature: float = 0):
+    def __init__(self, model: Optional[str] = None, temperature: float = 0):
         """
         Initialize RAG pipeline
         
         Args:
-            model: OpenAI model to use
+            model: OpenAI model to use (defaults to the OPENAI_MODEL env var,
+                   or "gpt-4o-mini" if that isn't set)
             temperature: Temperature for LLM responses
         """
+        model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         self.model = model
         self.temperature = temperature
         self.embeddings = OpenAIEmbeddings()
@@ -103,8 +105,8 @@ class RAGPipeline:
         if self.qa_chain is None:
             raise ValueError("QA chain not initialized. Call setup_qa_chain first.")
         
-        answer = self.qa_chain.run(question)
-        return answer
+        result = self.qa_chain.invoke({"query": question})
+        return result["result"]
     
     def initialize_from_pdf(self, pdf_path: str) -> None:
         """
